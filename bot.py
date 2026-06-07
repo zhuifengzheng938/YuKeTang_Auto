@@ -1142,6 +1142,36 @@ class YuketangBot:
         """)
 
     async def _ensure_playing(self):
+        # 先用真实点击模拟用户手势，绕过自动播放策略。
+        # 许多雨课堂播放器页面需要用户点击视频或播放按钮才能开始。
+        click_js = """
+            () => {
+                const videos = Array.from(document.querySelectorAll('video'));
+                for (const v of videos) {
+                    if (v.paused) {
+                        v.click();
+                    }
+                }
+            }
+        """
+        await self.page.evaluate(click_js)
+        play_selectors = [
+            "button.vjs-big-play-button", ".vjs-big-play-button",
+            "button[class*='play']", "[class*='play-btn']", "[class*='play-button']",
+            "[class*='start-play']", "[role='button'][class*='play']",
+            "text=播放", "text=▶",
+        ]
+        for scope in [self.page, *self.page.frames]:
+            for sel in play_selectors:
+                try:
+                    btn = await scope.query_selector(sel)
+                    if btn and await btn.is_visible():
+                        await btn.click()
+                        await asyncio.sleep(0.3)
+                        break
+                except Exception:
+                    continue
+        # 然后从 JS 层面调 play() 兜底
         js = """
             () => {
                 const videos = Array.from(document.querySelectorAll('video'));
@@ -1160,6 +1190,8 @@ class YuketangBot:
     async def _monitor_until_done(self):
         print("  监控视频播放中…")
         stall_count = 0
+        total_stall_recoveries = 0
+        max_stall_recoveries = 30  # 最多尝试恢复 30 次，约 75 秒后放弃
         last_time = -1.0
         missing_video_count = 0
 
@@ -1198,6 +1230,10 @@ class YuketangBot:
             if abs(cur - last_time) < 0.1:
                 stall_count += 1
                 if stall_count >= 5:
+                    total_stall_recoveries += 1
+                    if total_stall_recoveries >= max_stall_recoveries:
+                        print(f"  视频已停滞 {total_stall_recoveries} 次无法恢复，跳过当前课时")
+                        return
                     print(f"  检测到播放停滞，尝试恢复{self._format_video_state(video_state)}")
                     await self._ensure_playing()
                     await self._set_speed()
