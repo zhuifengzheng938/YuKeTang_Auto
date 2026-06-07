@@ -415,6 +415,10 @@ class YuketangBot:
 
     async def _collect_visible_lesson_candidates(self):
         candidates = []
+        total_found = 0
+        filtered_summary = 0
+        filtered_finished = 0
+        filtered_visited = 0
         for scope in [self.page, *self.page.frames]:
             try:
                 elements = await scope.query_selector_all(CATALOG_LESSON_SELECTOR)
@@ -424,6 +428,7 @@ class YuketangBot:
                 try:
                     if not await el.is_visible():
                         continue
+                    total_found += 1
                     href = self._normalize_lesson_url(await el.get_attribute("href"))
                     text = self._clean_text(await el.inner_text())
                     classes = ((await el.get_attribute("class")) or "").lower()
@@ -432,13 +437,17 @@ class YuketangBot:
                     if "disabled" in classes or "lock" in classes:
                         continue
                     if self._is_summary_node(text, href):
+                        filtered_summary += 1
                         continue
                     if self._lesson_text_is_finished(text):
+                        filtered_finished += 1
                         continue
                     key = self._lesson_key(href, text)
                     if not key or key in self.visited_lesson_keys:
+                        filtered_visited += 1
                         continue
                     if href and href in self.visited_lesson_urls:
+                        filtered_visited += 1
                         continue
                     box = await el.bounding_box()
                     top = box["y"] if box else 1e9
@@ -449,6 +458,8 @@ class YuketangBot:
                     })
                 except Exception:
                     continue
+        if total_found > 0:
+            print(f"  目录扫描: 可见{total_found}个 → 汇总{filtered_summary} 已完成{filtered_finished} 已访问{filtered_visited} 候选{len(candidates)}")
         return candidates
 
     def _is_summary_node(self, text: str, href) -> bool:
@@ -457,7 +468,10 @@ class YuketangBot:
             return False
         if href and "video-student" in href:
             return False
-        summary_flags = ["包含", "小节", "学习单元", "共计", "教学大纲"]
+        summary_flags = [
+            "包含", "小节", "学习单元", "共计", "教学大纲",
+            "考核截止", "修读说明", "修读要求", "课程介绍",
+        ]
         hits = sum(1 for f in summary_flags if f in text)
         # 命中两个及以上汇总特征，且没有具体视频链接，判定为汇总节点
         return hits >= 2 and not href
@@ -574,10 +588,16 @@ class YuketangBot:
             return False
         if any(flag in text for flag in ["未完成", "未学习", "未开始", "未读", "进行中"]):
             return False
-        return any(flag in text for flag in [
-            "已完成", "学习完成", "完成学习", "观看完成", "已看完",
-            "已学完", "已学习", "已读", "100%", "99%", "98%",
-        ])
+        # 百分数是硬信号——出现 100%/99%/98% 一定已完成
+        if any(flag in text for flag in ["100%", "99%", "98%"]):
+            return True
+        # 短文本里的"已完成"等文字信号可信（独立课时元素），长文本不可信（容器聚合子元素）
+        if len(text) < 60:
+            return any(flag in text for flag in [
+                "已完成", "学习完成", "完成学习", "观看完成", "已看完",
+                "已学完", "已学习", "已读",
+            ])
+        return False
 
     def _lesson_key(self, href, text):
         if href:
@@ -1248,14 +1268,26 @@ class YuketangBot:
         max_stall_recoveries = 30  # 最多尝试恢复 30 次，约 75 秒后放弃
         last_time = -1.0
         missing_video_count = 0
+        last_known_duration = 0.0
+        last_known_current_time = 0.0
+        max_seen_progress = 0.0  # 本轮见过的最高进度比例，用于判断视频是否曾接近播完
 
         while True:
             # 雨课堂播放器可能会把 playbackRate 重置回 1x，所以每轮都重新写入目标倍速。
             await self._set_speed()
 
             if await self._page_shows_completion():
-                print("  页面显示已完成，结束当前课时")
-                return
+                video_state = await self._get_video_state()
+                if video_state["missing"] or video_state["done"]:
+                    print("  页面显示已完成且视频确认结束，结束当前课时")
+                    return
+                dur = video_state.get("duration") or 0
+                cur = video_state.get("current_time") or 0
+                if dur > 0 and cur < dur * 0.9 and max_seen_progress < 0.9:
+                    print("  页面文字疑似误判已完成（视频进度尚早），继续监控")
+                else:
+                    print("  页面显示已完成，结束当前课时")
+                    return
 
             if await self._check_and_handle_question():
                 await self._ensure_playing()
@@ -1264,11 +1296,24 @@ class YuketangBot:
                 continue
 
             video_state = await self._get_video_state()
+            if not video_state["missing"]:
+                last_known_duration = video_state.get("duration") or 0
+                last_known_current_time = video_state.get("current_time") or 0
+                dur = video_state.get("duration") or 0
+                cur = video_state.get("current_time") or 0
+                if dur > 0:
+                    progress = cur / dur
+                    if progress > max_seen_progress:
+                        max_seen_progress = progress
+
             if video_state["missing"]:
                 missing_video_count += 1
                 if await self._page_shows_completion():
-                    print("  页面显示已完成，结束当前课时")
-                    return
+                    if last_known_duration > 0 and last_known_current_time < last_known_duration * 0.6 and max_seen_progress < 0.6:
+                        print("  视频消失但进度尚早，页面文字可能误判已完成，继续等待")
+                    else:
+                        print("  页面显示已完成且视频已消失，结束当前课时")
+                        return
                 if missing_video_count >= 5:
                     print("  视频元素暂时消失，结束当前课时")
                     return
