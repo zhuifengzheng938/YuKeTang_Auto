@@ -1142,24 +1142,59 @@ class YuketangBot:
         """)
 
     async def _ensure_playing(self):
-        # 先用真实点击模拟用户手势，绕过自动播放策略。
-        # 许多雨课堂播放器页面需要用户点击视频或播放按钮才能开始。
-        click_js = """
+        # 1) 查找并尝试关闭任何可能阻止播放的浮层/弹窗
+        await self._dismiss_blocking_layers()
+
+        # 2) 查找所有视频元素（含 shadow DOM），先点击模拟用户手势，再阻止页面 pause
+        force_play_js = """
             () => {
-                const videos = Array.from(document.querySelectorAll('video'));
-                for (const v of videos) {
-                    if (v.paused) {
-                        v.click();
-                    }
+                const seen = new Set();
+                function collect(root) {
+                    if (!root || seen.has(root)) return;
+                    seen.add(root);
+                    try {
+                        root.querySelectorAll('video').forEach(v => {
+                            if (v.paused) {
+                                v.click();
+                                v.play().catch(() => {});
+                            }
+                            if (!v.__yuketang_override_pause) {
+                                const origPause = v.pause.bind(v);
+                                let supressCount = 0;
+                                v.pause = function() {
+                                    supressCount++;
+                                    if (supressCount <= 2) origPause();
+                                };
+                                v.addEventListener('pause', e => {
+                                    if (v.currentTime > 0 && v.currentTime < v.duration - 1) {
+                                        v.play().catch(() => {});
+                                    }
+                                }, true);
+                                v.__yuketang_override_pause = true;
+                            }
+                        });
+                        root.querySelectorAll('*').forEach(el => {
+                            if (el.shadowRoot) collect(el.shadowRoot);
+                        });
+                    } catch (_) {}
                 }
+                collect(document);
             }
         """
-        await self.page.evaluate(click_js)
+        await self.page.evaluate(force_play_js)
+        for frame in self.page.frames:
+            try:
+                await frame.evaluate(force_play_js)
+            except Exception:
+                pass
+
+        # 3) 查找页面上可见的播放按钮并点击
         play_selectors = [
             "button.vjs-big-play-button", ".vjs-big-play-button",
             "button[class*='play']", "[class*='play-btn']", "[class*='play-button']",
             "[class*='start-play']", "[role='button'][class*='play']",
             "text=播放", "text=▶",
+            "[class*='start_play']", "[class*='big-play']",
         ]
         for scope in [self.page, *self.page.frames]:
             for sel in play_selectors:
@@ -1168,24 +1203,43 @@ class YuketangBot:
                     if btn and await btn.is_visible():
                         await btn.click()
                         await asyncio.sleep(0.3)
-                        break
                 except Exception:
                     continue
-        # 然后从 JS 层面调 play() 兜底
-        js = """
-            () => {
-                const videos = Array.from(document.querySelectorAll('video'));
-                for (const v of videos) {
-                    if (v.paused) v.play().catch(() => {});
-                }
-            }
-        """
-        await self.page.evaluate(js)
-        for frame in self.page.frames:
-            try:
-                await frame.evaluate(js)
-            except Exception:
-                pass
+
+    async def _dismiss_blocking_layers(self):
+        """关闭可能阻止视频播放的浮层/弹窗/遮罩."""
+        dismiss_texts = [
+            "知道了", "关闭", "确定", "确认", "好的",
+            "开始学习", "继续学习", "进入学习",
+        ]
+        for scope in [self.page, *self.page.frames]:
+            for sel in [
+                ".el-dialog", ".ant-modal", ".ant-modal-content",
+                "[class*='overlay']", "[class*='mask']", "[class*='modal']",
+                "[class*='dialog']", "[class*='popup']",
+            ]:
+                try:
+                    nodes = await scope.query_selector_all(sel)
+                except Exception:
+                    continue
+                for node in nodes:
+                    try:
+                        if not await node.is_visible():
+                            continue
+                        text = await node.inner_text()
+                        if any(t in text for t in dismiss_texts):
+                            for btn_sel in [
+                                "button", "a", "[role='button']",
+                                ".el-dialog__close", ".ant-modal-close",
+                                ".close", "[class*='close']",
+                            ]:
+                                btn = await node.query_selector(btn_sel)
+                                if btn and await btn.is_visible():
+                                    await btn.click()
+                                    await asyncio.sleep(0.3)
+                                    break
+                    except Exception:
+                        continue
 
     async def _monitor_until_done(self):
         print("  监控视频播放中…")
@@ -1235,6 +1289,10 @@ class YuketangBot:
                         print(f"  视频已停滞 {total_stall_recoveries} 次无法恢复，跳过当前课时")
                         return
                     print(f"  检测到播放停滞，尝试恢复{self._format_video_state(video_state)}")
+                    if total_stall_recoveries <= 2:
+                        debug = await self._debug_video_count()
+                        if debug:
+                            print(f"  页面上视频元素信息:{debug}")
                     await self._ensure_playing()
                     await self._set_speed()
                     stall_count = 0
@@ -1621,12 +1679,25 @@ class YuketangBot:
     async def _get_video_state(self):
         script = """
             () => {
-                const videos = Array.from(document.querySelectorAll('video'));
-                if (!videos.length) {
+                const allVideos = [];
+                const seen = new Set();
+                function collect(root) {
+                    if (!root || seen.has(root)) return;
+                    seen.add(root);
+                    try {
+                        root.querySelectorAll('video').forEach(v => allVideos.push(v));
+                        root.querySelectorAll('*').forEach(el => {
+                            if (el.shadowRoot) collect(el.shadowRoot);
+                        });
+                    } catch (_) {}
+                }
+                collect(document);
+
+                if (!allVideos.length) {
                     return {missing: true, done: false, current_time: 0};
                 }
 
-                const candidates = videos.map((v, index) => {
+                const candidates = allVideos.map((v, index) => {
                     const rect = typeof v.getBoundingClientRect === 'function'
                         ? v.getBoundingClientRect()
                         : {width: 0, height: 0};
@@ -1699,6 +1770,43 @@ class YuketangBot:
             "ended": False,
             "source": "none",
         }
+
+    async def _debug_video_count(self) -> str:
+        script = """
+            () => {
+                const seen = new Set();
+                let count = 0;
+                const infos = [];
+                function collect(root) {
+                    if (!root || seen.has(root)) return;
+                    seen.add(root);
+                    try {
+                        root.querySelectorAll('video').forEach(v => {
+                            const r = v.getBoundingClientRect();
+                            const s = v.currentSrc || '';
+                            const src = s.includes('/') ? '...' + s.slice(-60) : s;
+                            infos.push('#' + count + ' w=' + Math.round(r.width) + ' h=' + Math.round(r.height)
+                                + ' paused=' + v.paused + ' cur=' + (v.currentTime||0).toFixed(1)
+                                + ' dur=' + (v.duration||0).toFixed(0) + ' rs=' + (v.readyState||0)
+                                + ' ended=' + v.ended + ' src=' + src.slice(0,50));
+                            count++;
+                        });
+                        root.querySelectorAll('*').forEach(el => {
+                            if (el.shadowRoot) collect(el.shadowRoot);
+                        });
+                    } catch (_) {}
+                }
+                collect(document);
+                return infos.join('\\n');
+            }
+        """
+        try:
+            result = await self.page.evaluate(script)
+            if result:
+                return "\n" + result
+        except Exception:
+            pass
+        return ""
 
     async def _page_shows_completion(self) -> bool:
         selectors = [
