@@ -63,8 +63,8 @@ pip install playwright anthropic
 
 ```powershell
 $env:ANTHROPIC_API_KEY="你的API_KEY"
-$env:ANTHROPIC_BASE_URL="https://cloud.hongqiye.com"
-$env:ANTHROPIC_MODEL="claude-sonnet-4-6"
+$env:ANTHROPIC_BASE_URL="https://"
+$env:ANTHROPIC_MODEL="你的模型名称"
 $env:MODEL_WEB_SEARCH="0"
 ```
 
@@ -72,8 +72,8 @@ $env:MODEL_WEB_SEARCH="0"
 
 ```bash
 export ANTHROPIC_API_KEY="你的API_KEY"
-export ANTHROPIC_BASE_URL="https://cloud.hongqiye.com"
-export ANTHROPIC_MODEL="claude-sonnet-4-6"
+export ANTHROPIC_BASE_URL="https://"
+export ANTHROPIC_MODEL="你的模型名称"
 export MODEL_WEB_SEARCH="0"
 ```
 
@@ -98,7 +98,7 @@ https://www.yuketang.cn/v2/web/studentLog/课程ID?university_id=...&platform_id
 示例：
 
 ```text
-https://www.yuketang.cn/v2/web/studentLog/28932779?university_id=2930&platform_id=3&classroom_id=28932779
+https://www.yuketang.cn/v2/web/studentLog/28932779?university_id=2930&platform_id=3&classroom_id=28
 ```
 
 原因：雨课堂真正的课程顺序和完成状态在目录页里。脚本的主流程是：
@@ -118,25 +118,25 @@ https://www.yuketang.cn/v2/web/studentLog/28932779?university_id=2930&platform_i
 #### 普通模式
 
 ```powershell
-python "C:\Users\25286\yuketang_bot\main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/28932779?university_id=2930&platform_id=3&classroom_id=28932779"
+python "C:\Users\...\yuketang_bot\main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/289?university_id=2930&platform_id=3&classroom_id=29"
 ```
 
 #### 指定 2 倍速
 
 ```powershell
-python "C:\Users\25286\yuketang_bot\main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/28932779?university_id=2930&platform_id=3&classroom_id=28932779" --speed 2.0
+python "C:\Users\25286\yuketang_bot\main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/29?university_id=2930&platform_id=3&classroom_id=279" --speed 2.0
 ```
 
 #### 安静模式，推荐风扇声音大时使用
 
 ```powershell
-python "C:\Users\25286\yuketang_bot\main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/28932779?university_id=2930&platform_id=3&classroom_id=28932779" --quiet
+python "C:\Users\25286\yuketang_bot\main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/2?university_id=2930&platform_id=3&classroom_id=29" --quiet
 ```
 
 #### 安静模式 + 1 倍速
 
 ```powershell
-python "C:\Users\25286\yuketang_bot\main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/28932779?university_id=2930&platform_id=3&classroom_id=28932779" --quiet --speed 1.0
+python "C:\Users\25286\yuketang_bot\main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/27?university_id=2930&platform_id=3&classroom_id=279" --quiet --speed 1.0
 ```
 
 ---
@@ -146,31 +146,31 @@ python "C:\Users\25286\yuketang_bot\main.py" --course-url "https://www.yuketang.
 如果项目已经复制到了：
 
 ```text
-D:\freshman\try\yuketang_bot
+D:\...\yuketang_bot
 ```
 
 #### 普通模式
 
 ```powershell
-python "D:\freshman\try\yuketang_bot\main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/28932779?university_id=2930&platform_id=3&classroom_id=28932779"
+python "D:\...\yuketang_bot\main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/289?university_id=2930&platform_id=3&classroom_id=29"
 ```
 
 #### 指定 2 倍速
 
 ```powershell
-python "D:\freshman\try\yuketang_bot\main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/28932779?university_id=2930&platform_id=3&classroom_id=28932779" --speed 2.0
+python "D:\freshman\try\yuketang_bot\main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/2?university_id=2930&platform_id=3&classroom_id=279" --speed 2.0
 ```
 
 #### 安静模式
 
 ```powershell
-python "D:\freshman\try\yuketang_bot\main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/28932779?university_id=2930&platform_id=3&classroom_id=28932779" --quiet
+python "D:\freshman\try\yuketang_bot\main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/28?university_id=2930&platform_id=3&classroom_id=279" --quiet
 ```
 
 #### 安静模式 + 1 倍速
 
 ```powershell
-python "D:\freshman\try\yuketang_bot\main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/28932779?university_id=2930&platform_id=3&classroom_id=28932779" --quiet --speed 1.0
+python "D:\freshman\try\yuketang_bot\main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/289?university_id=2930&platform_id=3&classroom_id=279" --quiet --speed 1.0
 ```
 
 ---
@@ -179,16 +179,7 @@ python "D:\freshman\try\yuketang_bot\main.py" --course-url "https://www.yuketang
 
 Claude Code 里建议在命令前加 `!`。
 
-C 盘原项目：
 
-```bash
-! python "C:/Users/25286/yuketang_bot/main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/28932779?university_id=2930&platform_id=3&classroom_id=28932779" --quiet
-```
-
-D 盘副本：
-
-```bash
-! python "D:/freshman/try/yuketang_bot/main.py" --course-url "https://www.yuketang.cn/v2/web/studentLog/28932779?university_id=2930&platform_id=3&classroom_id=28932779" --quiet
 ```
 
 ---
