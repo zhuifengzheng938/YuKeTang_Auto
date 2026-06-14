@@ -106,3 +106,55 @@ CATALOG_LESSON_SELECTOR = (
     "[class*='lesson-item'], [class*='leaf-item'], [class*='video-item'], "
     "[class*='chapter-item'], [class*='activity__wrap'], [class*='content-box'] section"
 )
+
+# -- 习题页题目块 -----------------------------------------------------------
+EXERCISE_QUESTION_BLOCK_SELECTORS = [
+    "[class*='question-item']", "[class*='problem-item']",
+    "[class*='exam-item']", "[class*='quiz-item']",
+    "[class*='topic-item']", "[class*='subject-item']",
+    "[class*='question-block']", "[class*='question-wrap']",
+    ".question-item", ".problem-item", ".exam-item",
+    "fieldset", ".question", ".problem",
+    "[class*='single_choice']", "[class*='multiple_choice']",
+    "[class*='true_false']", "[class*='fill_blank']",
+]
+
+# -- 习题页选项（每个题目块内部）--------------------------------------------
+EXERCISE_OPTION_SELECTORS = [
+    ".option-item", ".choice-item", ".answer-option",
+    ".el-radio", ".el-checkbox",
+    ".ant-radio-wrapper", ".ant-checkbox-wrapper",
+    "label.option", "li.option",
+    "label", "li",
+    "input[type='radio']", "input[type='checkbox']",
+]
+
+# -- 习题页提交/交卷按钮 ----------------------------------------------------
+EXERCISE_SUBMIT_SELECTORS = [
+    "button:has-text('提交')", "button:has-text('交卷')",
+    "button:has-text('提交试卷')", "button:has-text('确认提交')",
+    "button:has-text('完成')", "button:has-text('结束答题')",
+    "a:has-text('提交')", "a:has-text('交卷')",
+    ".submit-btn", ".submit-exam", "[class*='submit-exam']",
+    ".el-button--primary", ".ant-btn-primary",
+]
+
+# -- 习题页翻页按钮 ----------------------------------------------------------
+EXERCISE_NEXT_PAGE_SELECTORS = [
+    "button:has-text('下一页')", "button:has-text('下一题')",
+    "button:has-text('继续')", "a:has-text('下一页')",
+    "a:has-text('下一题')", "[class*='next-page']", "[class*='next-btn']",
+]
+
+EXERCISE_PREV_PAGE_SELECTORS = [
+    "button:has-text('上一页')", "button:has-text('上一题')",
+    "a:has-text('上一页')", "a:has-text('上一题')",
+    "[class*='prev-page']", "[class*='prev-btn']",
+]
+
+# -- 习题页确认弹窗（交卷后的二次确认）---------------------------------------
+EXERCISE_CONFIRM_SELECTORS = [
+    "button:has-text('确定')", "button:has-text('确认')",
+    "button:has-text('是')", "button:has-text('提交')",
+    ".el-message-box__btns button", ".ant-modal-confirm-btns button",
+]

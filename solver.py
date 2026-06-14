@@ -5,14 +5,18 @@ import anthropic
 
 
 class QuestionSolver:
-    def __init__(self, api_key: str, base_url: str, model: str, web_search: bool = True):
+    def __init__(self, api_key: str, base_url: str, model: str,
+                 web_search: bool = True, fallback_model: str | None = None):
         client_kwargs = {"api_key": api_key}
         if base_url:
             client_kwargs["base_url"] = base_url.rstrip("/")
         self.client = anthropic.Anthropic(**client_kwargs)
         self.model = model
+        self.fallback_model = fallback_model
         self.web_search = web_search
         self._search_downgraded = False
+        self._image_downgraded = False
+        self.last_image_question: str | None = None
 
     def solve(
         self,
@@ -21,50 +25,59 @@ class QuestionSolver:
         q_type: str,
         failed_answers=None,
         attempt_no: int = 1,
+        image_base64: str | None = None,
     ):
         """Ask the model for an answer and parse it into the format bot.py expects.
 
-        The solver is intentionally model-first. Local hardcoded answers are not used:
-        if the provider returns empty or unparsable content, retry with stricter prompts
-        and finally raise a clear error for the caller to skip or retry the popup.
+        When image_base64 is provided, the model reads the question from the
+        screenshot (useful for anti-scraping font-obfuscated pages). Text params
+        are still used for answer format parsing.
         """
         failed_answers = {item for item in (failed_answers or []) if item}
-        prompts = [
-            self._build_prompt(
-                question_text,
-                options,
-                q_type,
-                failed_answers=failed_answers,
-                attempt_no=attempt_no,
-            ),
-            self._build_prompt(
-                question_text,
-                options,
-                q_type,
-                strict_json=True,
-                failed_answers=failed_answers,
-                attempt_no=attempt_no,
-            ),
-            self._build_prompt(
-                question_text,
-                options,
-                q_type,
-                ultra_strict=True,
-                failed_answers=failed_answers,
-                attempt_no=attempt_no,
-            ),
-        ]
+
+        if image_base64 and self._image_downgraded:
+            image_base64 = None
+
+        if image_base64:
+            prompts = [
+                self._build_image_prompt(
+                    q_type, len(options or []),
+                    failed_answers=failed_answers, attempt_no=attempt_no,
+                ),
+                self._build_image_prompt(
+                    q_type, len(options or []),
+                    strict_json=True,
+                    failed_answers=failed_answers, attempt_no=attempt_no,
+                ),
+            ]
+        else:
+            prompts = [
+                self._build_prompt(
+                    question_text, options, q_type,
+                    failed_answers=failed_answers, attempt_no=attempt_no,
+                ),
+                self._build_prompt(
+                    question_text, options, q_type,
+                    strict_json=True,
+                    failed_answers=failed_answers, attempt_no=attempt_no,
+                ),
+                self._build_prompt(
+                    question_text, options, q_type,
+                    ultra_strict=True,
+                    failed_answers=failed_answers, attempt_no=attempt_no,
+                ),
+            ]
 
         last_response = ""
         last_raw_summary = ""
         last_error = None
 
         for prompt in prompts:
-            response, raw_summary = self._call_model(prompt, stream=False)
+            response, raw_summary = self._call_model(
+                prompt, stream=False, image_base64=image_base64)
             last_response = response
             last_raw_summary = raw_summary
 
-            # 有些代理普通响应会给空字符串，但流式响应能正常吐文本。
             if not response.strip():
                 response, raw_summary = self._call_model(prompt, stream=True)
                 last_response = response
@@ -74,11 +87,15 @@ class QuestionSolver:
                 last_error = ValueError(f"模型返回空内容，原始响应摘要: {last_raw_summary}")
                 continue
 
+            if image_base64:
+                q_text = self._extract_question_from_response(response)
+                if q_text:
+                    self.last_image_question = q_text
+
             try:
                 parsed = self._parse(response, options, q_type)
             except ValueError as exc:
                 last_error = exc
-                # 下一轮用更严格的 prompt 重新问，不靠本地硬编码猜答案。
                 continue
 
             normalized = self.normalize_answer(parsed, q_type, options)
@@ -91,12 +108,28 @@ class QuestionSolver:
             raise last_error
         raise ValueError(f"无法获得模型答案，最后响应: {last_response!r}，原始响应摘要: {last_raw_summary}")
 
-    def _call_model(self, prompt: str, stream: bool = False):
+    def _call_model(self, prompt: str, stream: bool = False,
+                     image_base64: str | None = None):
+        if image_base64:
+            content = [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": image_base64,
+                    },
+                },
+                {"type": "text", "text": prompt},
+            ]
+        else:
+            content = prompt
+
         kwargs = {
             "model": self.model,
             "max_tokens": 512,
             "system": self._build_system_prompt(),
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": content}],
         }
 
         search_enabled = self.web_search and not self._search_downgraded
@@ -108,10 +141,21 @@ class QuestionSolver:
                 msg = self.client.messages.create(**kwargs)
                 return self._extract_text(msg), self._summarize_raw(msg)
             except Exception as exc:
+                if image_base64 and not self._image_downgraded and self._should_disable_image(exc):
+                    self._image_downgraded = True
+                    print("  接口不支持图片输入，已自动回退为纯文本作答")
+                    return self._call_model(prompt, stream=False)
                 if search_enabled and self._should_disable_search(exc):
                     self._search_downgraded = True
                     print("  模型侧联网搜索不受支持，已自动回退为普通作答")
                     kwargs.pop("extra_body", None)
+                    msg = self.client.messages.create(**kwargs)
+                    return self._extract_text(msg), self._summarize_raw(msg)
+                if self.fallback_model and kwargs["model"] != self.fallback_model:
+                    print(f"  模型 {kwargs['model']} 调用失败，回退到 {self.fallback_model}")
+                    kwargs["model"] = self.fallback_model
+                    if self._image_downgraded:
+                        return self._call_model(prompt, stream=False)
                     msg = self.client.messages.create(**kwargs)
                     return self._extract_text(msg), self._summarize_raw(msg)
                 raise
@@ -135,16 +179,29 @@ class QuestionSolver:
                 return streamed_text, streamed_text[:500]
             return self._extract_text(final_message), self._summarize_raw(final_message)
         except Exception as exc:
+            if image_base64 and not self._image_downgraded and self._should_disable_image(exc):
+                self._image_downgraded = True
+                print("  接口不支持图片输入(流式)，已自动回退为纯文本作答")
+                return self._call_model(prompt, stream=False)
             if search_enabled and self._should_disable_search(exc):
                 self._search_downgraded = True
                 print("  模型侧联网搜索不受支持，流式路径已自动回退为普通作答")
                 return self._call_model(prompt, stream=False)
+            if self.fallback_model and kwargs["model"] != self.fallback_model:
+                print(f"  模型 {kwargs['model']} 流式调用失败，回退到 {self.fallback_model}")
+                kwargs["model"] = self.fallback_model
+                if self._image_downgraded:
+                    return self._call_model(prompt, stream=False)
+                try:
+                    msg = self.client.messages.create(**kwargs)
+                    return self._extract_text(msg), self._summarize_raw(msg)
+                except Exception:
+                    pass
             return "", f"stream 调用失败: {exc}"
 
     def _build_system_prompt(self) -> str:
         base = (
-            "你是严谨的课程题目作答助手。只根据题目和选项作答。"
-            "不要解释，不要输出推理过程。"
+            "你是严谨的课程题目作答助手。请仔细阅读题目，运用你的知识认真作答。"
         )
         if self.web_search and not self._search_downgraded:
             return (
@@ -152,14 +209,30 @@ class QuestionSolver:
                 + "如果当前模型或网关支持联网搜索，请先搜索再作答；"
                 + "但最终只输出题目要求的最终答案，不要输出搜索过程、引用或解释。"
             )
-        return base
+        return (
+            base
+            + "由于无法联网验证，请格外仔细地审题，根据你的知识做出最佳判断。"
+            + "对于判断题，仔细分辨陈述的真伪。"
+            + "不要解释，不要输出推理过程，只输出最终答案。"
+        )
 
     @staticmethod
     def _should_disable_search(exc: Exception) -> bool:
         text = str(exc).lower()
         markers = [
-            "web_search", "web search", "tool", "unsupported", "unknown parameter",
-            "invalid_request_error", "extra inputs are not permitted", "422", "400",
+            "web_search", "web search", "extra_body",
+            "unknown parameter", "extra inputs are not permitted",
+            "400", "422", "unsupported",
+        ]
+        return any(marker in text for marker in markers)
+
+    @staticmethod
+    def _should_disable_image(exc: Exception) -> bool:
+        text = str(exc).lower()
+        markers = [
+            "image", "multimodal", "media", "vision",
+            "unsupported", "invalid content", "content block",
+            "bad response status code", "400", "422",
         ]
         return any(marker in text for marker in markers)
 
@@ -206,7 +279,7 @@ class QuestionSolver:
                 allowed = ",".join(chr(65 + i) for i in range(len(options or [])))
                 rule = f"只输出正确选项字母，用英文逗号分隔；字母只能来自：{allowed}。"
             elif q_type == "truefalse":
-                rule = "只输出 正确 或 错误。"
+                rule = "只输出 正确 或 错误。成立/正确->正确，不成立/错误->错误。"
             else:
                 rule = "只输出最终答案。"
             return f"{attempt_block}{failed_block}{rule}\n\n{question}\n\n{opts}\n答案："
@@ -231,9 +304,11 @@ class QuestionSolver:
             return (
                 f"{attempt_block}"
                 f"{failed_block}"
-                "请判断以下说法。只能输出“正确”或“错误”，"
-                "不要解释，不要输出其他内容。\n\n"
-                f"{question}\n\n答案："
+                "请仔细判断以下说法是否成立。\n"
+                "如果说法成立、正确，请输出：正确\n"
+                "如果说法不成立、错误，请输出：错误\n"
+                "务必认真思考后再作答，不要解释。\n\n"
+                f"{question}\n\n你的判断："
             )
         return (
             f"{attempt_block}"
@@ -241,6 +316,64 @@ class QuestionSolver:
             "请回答以下填空题。只输出最终答案，不要解释，不要重复题目。\n\n"
             f"{question}\n\n答案："
         )
+
+    def _build_image_prompt(
+        self,
+        q_type: str,
+        option_count: int,
+        strict_json: bool = False,
+        failed_answers=None,
+        attempt_no: int = 1,
+    ) -> str:
+        type_instruction = {
+            "single": "这是一道单选题。请查看截图中的题目和选项，选出唯一正确答案。",
+            "multiple": "这是一道多选题。请查看截图中的题目和选项，选出所有正确答案。",
+            "truefalse": "这是一道判断题。请查看截图中的题目，判断正误。",
+            "fillin": "这是一道填空题。请查看截图中的题目，写出答案。",
+        }
+        instruction = type_instruction.get(q_type, "请查看截图中的题目，选出正确答案。")
+
+        failed_block = self._build_failed_answer_block(failed_answers)
+        attempt_block = f"当前是第 {attempt_no} 次作答。\n" if attempt_no > 1 else ""
+
+        if strict_json:
+            format_rules = (
+                "格式：\n"
+                "题目：<你从截图中看到的完整题目文本>\n"
+                "{\"answer\":\"<你的答案>\"}\n"
+                "只输出这两行，不要解释，不要 Markdown。\n"
+            )
+        else:
+            format_rules = (
+                "按以下格式回复，只输出两行，不要解释：\n"
+                "题目：<你从截图中看到的完整题目文本>\n"
+                "答案：<你的答案>\n"
+            )
+
+        if q_type == "single":
+            format_rules += (
+                f"答案填一个大写字母（A-{chr(64 + option_count)}），例如 B。"
+            )
+        elif q_type == "multiple":
+            allowed = ",".join(chr(65 + i) for i in range(option_count))
+            format_rules += (
+                f"答案填大写字母用英文逗号分隔，例如 {allowed[:3]}。"
+            )
+        elif q_type == "truefalse":
+            format_rules += "答案填 正确 或 错误。"
+        else:
+            format_rules += "答案填最终答案文本。"
+
+        return f"{attempt_block}{failed_block}{instruction}\n{format_rules}"
+
+    @staticmethod
+    def _extract_question_from_response(response: str) -> str | None:
+        match = re.search(r"题目[：:]\s*(.+?)(?:\n|$)", response)
+        if match:
+            text = match.group(1).strip()
+            if text and not text.startswith("{"):
+                return text
+        return None
 
     @staticmethod
     def _build_failed_answer_block(failed_answers) -> str:
@@ -302,10 +435,8 @@ class QuestionSolver:
 
     @staticmethod
     def _extract_text(msg) -> str:
-        """Extract text from Anthropic SDK objects or proxy-specific dict/string shapes."""
         plain = QuestionSolver._to_plain(msg)
 
-        # If a proxy returns JSON as a string, parse and extract from it.
         if isinstance(plain, str):
             stripped = plain.strip()
             if not stripped:
@@ -315,7 +446,6 @@ class QuestionSolver:
             except Exception:
                 return stripped
 
-        # Try common exact paths first.
         for path in [
             ("content",),
             ("text",),
@@ -332,7 +462,6 @@ class QuestionSolver:
             if text:
                 return text
 
-        # Fall back to a recursive search for text-bearing fields.
         return QuestionSolver._recursive_text_search(plain).strip()
 
     @staticmethod
@@ -452,6 +581,8 @@ class QuestionSolver:
 
         if q_type == "truefalse":
             normalized = response.strip().lower()
+            # DEBUG: print raw model response
+            print(f"    [DEBUG] 模型原始输出: {response!r}")
             if response == "正确" or normalized in {"true", "yes", "对"}:
                 return True
             if response == "错误" or normalized in {"false", "no", "错"}:
@@ -468,7 +599,6 @@ class QuestionSolver:
 
     @staticmethod
     def _extract_answer_field(response: str) -> str:
-        # JSON output, e.g. {"answer":"B,C"}
         try:
             obj = json.loads(response)
             if isinstance(obj, dict):
@@ -481,7 +611,6 @@ class QuestionSolver:
         except Exception:
             pass
 
-        # Text output, e.g. 答案：B,C
         match = re.search(r"(?:答案|正确答案|answer)\s*[:：]\s*([^\n\r]+)", response, flags=re.I)
         if match:
             return match.group(1).strip()
@@ -507,7 +636,6 @@ class QuestionSolver:
         allowed = chr(64 + option_count)
         upper = response.upper()
 
-        # Prefer explicit answer-like sequences: B,C,E / BCE / B C E
         compact = re.sub(r"[^A-%s]" % allowed, "", upper)
         if compact and len(compact) <= option_count:
             seen = []

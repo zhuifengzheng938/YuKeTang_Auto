@@ -23,7 +23,7 @@ class VideoHandler:
     # -- main entry ------------------------------------------------------------
 
     async def watch_page_video(self, remember_url_cb) -> bool:
-        """Watch video on current page. Returns True if video was played.
+        """Handle current lesson page. Returns True if content was processed.
 
         If no video is found, delegates to ExerciseHandler (if available).
         """
@@ -36,7 +36,7 @@ class VideoHandler:
         video = await self._find_video()
         if not video:
             # Check if this is an exercise page
-            if self.exercise_handler and self.exercise_handler.is_exercise_page():
+            if self.exercise_handler and await self.exercise_handler.is_exercise_page():
                 return await self.exercise_handler.handle(self.question_handler)
             print("  未找到视频，跳过")
             return False

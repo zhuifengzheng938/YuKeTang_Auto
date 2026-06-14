@@ -14,7 +14,9 @@ def parse_args():
     p.add_argument("--base-url", default=config.ANTHROPIC_BASE_URL,
                    help="兼容接口地址，例如 https://cloud.hongqiye.com")
     p.add_argument("--model", default=config.ANTHROPIC_MODEL,
-                   help="模型名，例如 claude-sonnet-4-6")
+                   help="模型名，例如 gpt-5.5")
+    p.add_argument("--fallback-model", default=config.ANTHROPIC_FALLBACK_MODEL,
+                   help="回退模型，主模型不可用时自动切换，默认 claude-opus-4-6")
     p.add_argument("--web-search", dest="web_search", action="store_true",
                    default=config.MODEL_WEB_SEARCH,
                    help="优先启用模型侧联网搜索（默认开启）")
@@ -26,6 +28,11 @@ def parse_args():
                    help="答题前等待秒数（模拟思考），默认 3")
     p.add_argument("--login-timeout", type=int, default=config.LOGIN_TIMEOUT,
                    help="等待微信扫码登录的超时秒数，默认 120")
+    p.add_argument("--solve-exercises", dest="solve_exercises", action="store_true",
+                   default=True,
+                   help="启用习题页自动作答（默认开启）")
+    p.add_argument("--no-solve-exercises", dest="solve_exercises", action="store_false",
+                   help="关闭习题页自动作答，遇到习题页直接跳过")
     p.add_argument("--quiet", action="store_true",
                    help="安静模式：降低倍速和监控频率，不自动选择最高倍速，减少风扇噪音")
     return p.parse_args()
@@ -48,9 +55,11 @@ async def run(args):
     print(f"- course_url: {args.course_url or '未提供'}")
     print(f"- base_url: {args.base_url}")
     print(f"- model: {args.model}")
+    print(f"- fallback_model: {args.fallback_model}")
     print(f"- web_search: {args.web_search}")
     print(f"- speed: {args.speed}")
     print(f"- quiet: {args.quiet}")
+    print(f"- solve_exercises: {args.solve_exercises}")
     print(f"- answer_delay: {args.answer_delay}")
     print(f"- login_timeout: {args.login_timeout}")
 
@@ -59,10 +68,12 @@ async def run(args):
             api_key=args.api_key,
             base_url=args.base_url,
             model=args.model,
+            fallback_model=args.fallback_model,
             web_search=args.web_search,
             speed=args.speed,
             answer_delay=args.answer_delay,
             quiet=args.quiet,
+            solve_exercises=args.solve_exercises,
         ) as bot:
             await bot.login(timeout=args.login_timeout)
             await bot.watch_course(args.course_url)

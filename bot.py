@@ -23,13 +23,18 @@ class YuketangBot:
         base_url: str,
         model: str,
         web_search: bool = True,
+        fallback_model: str | None = None,
         speed: float = 2.0,          # reserved, not currently used
         answer_delay: int = 3,
         quiet: bool = False,
+        solve_exercises: bool = True,
     ):
-        self.solver = QuestionSolver(api_key, base_url, model, web_search=web_search)
+        self.solver = QuestionSolver(api_key, base_url, model,
+                                     web_search=web_search,
+                                     fallback_model=fallback_model)
         self.quiet = quiet
         self.answer_delay = answer_delay
+        self.solve_exercises = solve_exercises
         self.session = BrowserSession(quiet=quiet)
 
         # Created after session starts (need page)
@@ -49,7 +54,7 @@ class YuketangBot:
         page = self.session.page
 
         self._question = QuestionHandler(page, self.solver, self.answer_delay)
-        self._exercise = ExerciseHandler(page)
+        self._exercise = ExerciseHandler(page) if self.solve_exercises else None
         self._catalog = CatalogNavigator(
             page,
             goto_cb=self.session.goto,
